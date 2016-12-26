@@ -10,6 +10,17 @@ library(lubridate)
 #### Functions ####
 #~~~~~~~~~~~~~~~~~~
 
+# Generate lagging indicators
+generate_lag <- function(stock.df, max.lag) {
+  # Create temp column of lagging indicators
+  high.temp <- embed(c(stock.df$Close, rep(NA, max.lag-1)),max.lag) %>% as.data.frame()
+  high.temp <- apply(high.temp, 1, max)
+  return(high.temp)
+}
+
+
+
+
 # Lookup stock histories and return a dataframe
 get_stock_history <- function(target.symbol) {
   # Get stock histories from a target symbol
@@ -26,37 +37,22 @@ get_stock_history <- function(target.symbol) {
 }
 
 
-# Generate lagging indicators
-generate_lag <- function(stock.df, max.lag) {
-  # Create temp column of lagging indicators
-  high.temp <- embed(c(stock.df$Close, rep(NA, max.lag-1)),max.lag) %>% as.data.frame()
-  high.temp <- apply(high.temp, 1, max)
-  return(high.temp)
+
+# Get the stock history and decorate with summary stats
+build_decorated_stock <- function(target.symbol) {
+  # Get stock history
+  constituent <- get_stock_history(target.symbol)
+  
+  # Add lagging indicators
+  constituent <- constituent %>% mutate(hi.12mo = generate_lag(constituent, max.lag = 251),
+                                        hi.9mo = generate_lag(constituent, max.lag = 190),
+                                        hi.6mo = generate_lag(constituent, max.lag = 130)) %>%
+    mutate(pct.of.12mo.hi = 100 * round(Close / hi.12mo, 4),
+           pct.of.9mo.hi = 100 * round(Close / hi.9mo, 4),
+           pct.of.6mo.hi = 100 * round(Close / hi.6mo, 4))
+  
+  return(constituent)
 }
-
-
-# generate_stock_df <- function(endpoint) {
-#   # Get data from JSON API
-#   temp.stock <- fromJSON(endpoint)
-#   stock.df <- temp.stock$dataset$data %>% as.data.frame()
-#   colnames(stock.df) <- temp.stock$dataset$column_names
-#   stock.df$Name <- temp.stock$dataset$name
-#   
-#   # Format columns
-#   stock.df$Date <- ymd(stock.df$Date)
-#   
-#   numeric.cols <- c("Open", "High", "Low", "Close", "Volume")
-#   stock.df[,numeric.cols] <- sapply(stock.df[,numeric.cols], as.character)
-#   stock.df[,numeric.cols] <- sapply(stock.df[,numeric.cols], as.numeric)
-#   
-#   # Add rolling days column
-#   stock.df$hi.12mo <- generate_lag(stock.df, max.lag = 251)
-#   stock.df$hi.9mo <- generate_lag(stock.df, max.lag = 190)
-#   stock.df$hi.6mo <- generate_lag(stock.df, max.lag = 130)
-#   
-#   return(stock.df)
-# } 
-
 
 
 
@@ -66,12 +62,58 @@ generate_lag <- function(stock.df, max.lag) {
 
 tecdax.index <- read.csv("./Data/Tecdax.csv", stringsAsFactors = FALSE)
 
-tecdax <- lapply(1:nrow(tecdax.index), function(x) get_stock_history(tecdax.index$Symbol[x]))
+tecdax <- lapply(1:nrow(tecdax.index), function(x) build_decorated_stock(tecdax.index$Symbol[x]))
 tecdax <- as.data.frame(do.call(rbind, tecdax))
 
-# Get lagging indicators
-zz <- get_stock_history(tecdax.index$Symbol[1])
-zz$hi.52w <- generate_lag(zz, max.lag = 251)
+
+
+
+
+
+
+
+
+
+
+
+
+# #### Set Buy/Sell Rules ####
+# 
+# tecdax$Own <- NA
+# buy.threshold <- -9
+# sell.threshold <- -15
+# stop.loss.threshold <- -15
+# 
+# tecdax <- tecdax %>% group_by(Name) %>%
+#   arrange(Date) %>%
+#   mutate(Own = ifelse(pct.9mo >= buy.threshold, TRUE, Own)) %>%
+#   mutate(Own = ifelse(pct.9mo < sell.threshold, FALSE, Own)) %>%
+#   mutate(Own = ifelse(pct.9mo < buy.threshold & pct.9mo >= sell.threshold, lag(Own), Own)) %>%
+#   mutate(Own = zoo::na.locf(Own, na.rm = FALSE)) %>%
+#   ungroup()
+# 
+# 
+# 
+# 
+# 
+# #### Track Buy/Sell Cycles, w/ cumulative summing ####
+# 
+# tecdax <- tecdax %>% group_by(Name) %>%
+#   arrange(Date) %>%
+#   mutate(Buy.Price = ifelse(Own == TRUE & lag(Own) == FALSE, Close, NA)) %>%
+#   mutate(Sell.Price = ifelse(Own == FALSE & lag(Own) == TRUE, Close, NA)) %>%
+#   ungroup()
+# 
+# own.at.end <- tecdax %>% group_by(Name) %>%
+#   arrange(Date) %>%
+#   summarise(last.own = last(Own),
+#             last.close = last(Close)) %>%
+#   filter(last.own == TRUE) %>%
+#   ungroup()
+# 
+# bought <- sum(tecdax$Buy.Price, na.rm = TRUE)
+# sold <- sum(tecdax$Sell.Price, na.rm = TRUE) + sum(own.at.end$last.close)
+# profit <- sold - bought
 
 
 
